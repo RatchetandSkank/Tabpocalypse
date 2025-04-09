@@ -1,0 +1,20 @@
+body {
+  font-family: Arial, sans-serif;
+  text-align: center;
+  padding: 1em;
+  background: #1e1e1e;
+  color: #fff;
+  width: 300px; /* 👈 Increase this as needed */
+  min-width: 300px;
+}
+
+
+button {
+  margin-top: 50px;
+  padding: 8px 12px;
+  border: none;
+  background: #ff4d4d;
+  color: white;
+  border-radius: 5px;
+  cursor: pointer;
+}
