@@ -3,30 +3,18 @@ document.addEventListener("DOMContentLoaded", () => {
   const roastEl = document.getElementById("roast");
   const mercyToggle = document.getElementById("mercyToggle");
 
-  // Safety check for DOM elements
-  if (!countEl || !roastEl || !mercyToggle) {
-    console.error("❌ DOM elements not found in popup.");
-    return;
-  }
+  if (!countEl || !roastEl || !mercyToggle) return;
 
-  // Load and set Mercy Mode toggle
-  chrome.storage.sync.get(['mercyMode'], (data) => {
-    mercyToggle.checked = data.mercyMode || false;
-  });
-
-  mercyToggle.addEventListener('change', () => {
-    chrome.storage.sync.set({ mercyMode: mercyToggle.checked });
-  });
-
-  // Get tab count and display roast
   chrome.tabs.query({}, (tabs) => {
     const tabCount = tabs.length;
     countEl.textContent = `Tabs: ${tabCount}`;
     roastEl.textContent = getRoastByTabCount(tabCount);
   });
-});
 
-// 🔥 Roast Logic
+  mercyToggle.addEventListener('change', () => {
+    chrome.runtime.sendMessage({ action: 'setMercyMode', value: mercyToggle.checked });
+  });
+});
 
 function pickRandom(list) {
   return list[Math.floor(Math.random() * list.length)];
@@ -53,7 +41,7 @@ const roastTiers = {
     "Close 10 tabs, gain +5 mental stability.",
     "Google just flagged your activity as 'suspiciously extra.'",
     "This is a monument to indecision.",
-    "That’s not multitasking, that’s hoarding.",
+    "That's not multitasking, that's hoarding.",
     "You're one 'new tab' away from the void.",
     "Even your bookmarks are screaming."
   ],
@@ -75,9 +63,9 @@ const roastTiers = {
     "You're the reason task managers exist.",
     "Your browser history is just pure chaos.",
     "This is digital gluttony at its finest.",
-    "You’re building your own digital multiverse.",
+    "You're building your own digital multiverse.",
     "The tabs have tabs now.",
-    "You’re one click away from a BSOD.",
+    "You're one click away from a BSOD.",
     "I bet your taskbar looks like a ticker tape.",
     "If you opened one more tab, you'd summon Clippy from the underworld."
   ],
@@ -89,16 +77,16 @@ const roastTiers = {
     "This is less of a browser and more of a black hole.",
     "I showed this to a sysadmin and they fainted.",
     "You need help. Professional, spiritual, maybe both.",
-    "If tabs were sins, you’re beyond redemption.",
+    "If tabs were sins, you're beyond redemption.",
     "Your tab collection has surpassed your life goals.",
     "Congratulations. You broke the internet.",
     "You've achieved full goblin mode.",
     "Your browser fan is audible in another room.",
     "At this point, even your tabs have tabs.",
     "You've reached a level of multitasking unknown to mankind.",
-    "You’re the reason Chrome eats 12GB of RAM.",
+    "You're the reason Chrome eats 12GB of RAM.",
     "You're actively summoning Skynet through tabs alone.",
-    "This isn’t just hoarding — it’s digital necromancy.",
+    "This isn't just hoarding — it's digital necromancy.",
     "This tab count is a personality disorder.",
     "This is what happens when chaos gets Wi-Fi.",
     "I'm not saying you're broken, but your browser sure is."
