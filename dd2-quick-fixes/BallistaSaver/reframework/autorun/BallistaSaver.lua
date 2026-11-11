@@ -10,6 +10,7 @@
 --   * Mode "Only names matching": protects only objects whose name contains one of the patterns.
 --   * "Recently hit objects" shows the names of non-character objects that got hit, so you can see
 --     what the ballistas are called and switch to name mode if you want.
+--   * "Repair broken objects": scan for wrecked objects near you and try to un-break them.
 
 local CONFIG_FILE = "BallistaSaver.json"
 
@@ -101,6 +102,125 @@ if calc_method then
         end)
 end
 
+------------------------------------------------------------------------
+-- Repair: find broken world objects (app.GimmickBase) near you and try to un-break them.
+-- Known fields (from other working DD2 mods): _IsBroken, IsNoDamage. Which method rebuilds the
+-- object isn't known yet, so the menu lists the object's own reset-style methods as buttons and
+-- writes everything to reframework/data/BallistaSaver_scan.json for diagnosis.
+------------------------------------------------------------------------
+local repair = { radius = 60, onlyBroken = true, list = {}, msg = "", lockAfter = true }
+local METHOD_WORDS = { "reset", "restore", "repair", "reviv", "rebirth", "recover", "rebuild", "respawn", "regenerat", "unbreak" }
+
+local function cam_pos()
+    local ok, p = pcall(function() return sdk.get_primary_camera():get_GameObject():get_Transform():get_Position() end)
+    return ok and p or nil
+end
+
+local function gimmick_info(gb)
+    local r = { gb = gb }
+    pcall(function() r.go = gb:get_GameObject(); r.name = tostring(r.go:get_Name()) end)
+    pcall(function() r.type = gb:get_type_definition():get_full_name() end)
+    pcall(function() r.broken = gb:get_field("_IsBroken") end)
+    pcall(function() r.noDamage = gb:get_field("IsNoDamage") end)
+    pcall(function() r.pos = r.go:get_Transform():get_Position() end)
+    return r
+end
+
+local function candidate_methods(gb)
+    local out, seen = {}, {}
+    local td = gb:get_type_definition()
+    local depth = 0
+    while td and depth < 8 do
+        pcall(function()
+            for _, m in ipairs(td:get_methods()) do
+                local n = m:get_name()
+                local ln = n:lower()
+                if m:get_num_params() == 0 and not m:is_static() and not seen[n] then
+                    for _, w in ipairs(METHOD_WORDS) do
+                        if ln:find(w, 1, true) then seen[n] = true; out[#out + 1] = n; break end
+                    end
+                end
+            end
+        end)
+        td = td:get_parent_type(); depth = depth + 1
+    end
+    table.sort(out)
+    return out
+end
+
+local function dump_fields(gb)
+    local out = {}
+    local td = gb:get_type_definition()
+    local depth = 0
+    while td and depth < 8 do
+        pcall(function()
+            for _, f in ipairs(td:get_fields()) do
+                if not f:is_static() then
+                    local n = f:get_name()
+                    local ok, v = pcall(function() return gb:get_field(n) end)
+                    if ok and (type(v) == "boolean" or type(v) == "number" or type(v) == "string") then out[n] = v end
+                end
+            end
+        end)
+        td = td:get_parent_type(); depth = depth + 1
+    end
+    return out
+end
+
+local function scan()
+    repair.list = {}
+    local me = cam_pos()
+    if not me then repair.msg = "Couldn't read your position."; return end
+    local ok, err = pcall(function()
+        local sm = sdk.get_native_singleton("via.SceneManager")
+        local scene = sdk.call_native_func(sm, sdk.find_type_definition("via.SceneManager"), "get_CurrentScene()")
+        local arr = scene:call("findComponents(System.Type)", sdk.typeof("app.GimmickBase"))
+        for _, gb in ipairs(arr and arr:get_elements() or {}) do
+            local r = gimmick_info(gb)
+            if r.pos then
+                local dx, dy, dz = r.pos.x - me.x, r.pos.y - me.y, r.pos.z - me.z
+                r.dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+                if r.dist <= repair.radius and (not repair.onlyBroken or r.broken == true) then
+                    r.methods = candidate_methods(gb)
+                    repair.list[#repair.list + 1] = r
+                end
+            end
+        end
+    end)
+    table.sort(repair.list, function(a, b) return a.dist < b.dist end)
+    repair.msg = ok and ("Found %d object(s)."):format(#repair.list) or ("Scan failed: " .. tostring(err))
+end
+
+local function save_scan()
+    local rows = {}
+    for _, r in ipairs(repair.list) do
+        rows[#rows + 1] = { name = r.name, type = r.type, broken = r.broken, noDamage = r.noDamage, dist = r.dist,
+            pos = r.pos and { r.pos.x, r.pos.y, r.pos.z }, methods = r.methods, fields = dump_fields(r.gb) }
+    end
+    pcall(json.dump_file, "BallistaSaver_scan.json", rows)
+    repair.msg = "Saved reframework/data/BallistaSaver_scan.json"
+end
+
+local function lock(r)
+    if repair.lockAfter then pcall(function() r.gb:set_field("IsNoDamage", true) end) end
+end
+
+local function basic_repair(r)
+    local ok = pcall(function() r.gb:set_field("_IsBroken", false) end)
+    lock(r)
+    local info = gimmick_info(r.gb)
+    r.broken, r.noDamage = info.broken, info.noDamage
+    return ok
+end
+
+local function try_method(r, m)
+    local ok, err = pcall(function() r.gb:call(m .. "()") end)
+    lock(r)
+    local info = gimmick_info(r.gb)
+    r.broken = info.broken
+    repair.msg = ("%s.%s(): %s, broken now: %s"):format(r.name or "?", m, ok and "called" or ("error " .. tostring(err)), tostring(r.broken))
+end
+
 -- characters and objects come and go; drop the cache now and then so a reused address isn't misjudged
 re.on_frame(function()
     cache_frames = cache_frames + 1
@@ -134,6 +254,44 @@ re.on_draw_ui(function()
                 r.blocked and "[BLOCKED]" or "[let through]"))
         end
         if imgui.button("Clear list") then recent = {} end
+        imgui.tree_pop()
+    end
+    if imgui.tree_node("Repair broken objects (ballistas)") then
+        imgui.text("Stand next to the wrecked ballistas, then Scan.")
+        local c
+        c, repair.radius = imgui.slider_int("Radius (m)", repair.radius, 10, 200)
+        c, repair.onlyBroken = imgui.checkbox("Only broken ones", repair.onlyBroken)
+        c, repair.lockAfter = imgui.checkbox("Make repaired objects unbreakable", repair.lockAfter)
+        if imgui.button("Scan") then scan() end
+        imgui.same_line()
+        if imgui.button("Save scan to file") then save_scan() end
+        imgui.same_line()
+        if imgui.button("Repair all listed (basic)") then
+            for _, r in ipairs(repair.list) do basic_repair(r) end
+            repair.msg = "Cleared the broken flag on all listed objects."
+        end
+        if repair.msg ~= "" then imgui.text(repair.msg) end
+        for i, r in ipairs(repair.list) do
+            imgui.push_id(i)
+            if imgui.tree_node(("%s  (%.0f m)  broken: %s"):format(r.name or "?", r.dist or 0, tostring(r.broken))) then
+                imgui.text("Type: " .. tostring(r.type))
+                imgui.text("No-damage flag: " .. tostring(r.noDamage))
+                if imgui.button("Basic repair (clear broken flag)") then
+                    basic_repair(r)
+                    repair.msg = ("%s: broken now %s"):format(r.name or "?", tostring(r.broken))
+                end
+                if #r.methods > 0 then
+                    imgui.text("Its own reset-style methods (try one at a time):")
+                    for _, m in ipairs(r.methods) do
+                        if imgui.button(m) then try_method(r, m) end
+                    end
+                else
+                    imgui.text("No reset-style methods found on this object.")
+                end
+                imgui.tree_pop()
+            end
+            imgui.pop_id()
+        end
         imgui.tree_pop()
     end
     imgui.tree_pop()
